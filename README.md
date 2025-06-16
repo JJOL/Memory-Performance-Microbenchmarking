@@ -6,3 +6,5 @@ Code and scripts used to microbenchmark the Memory Hierarchy in BSC's MareNostru
 * multithreaded_pbw.cpp: For measuring also Peak Bandwidth.
 
 Experiments were run from script ```run-experiment.sh``` in SLURM and using _numactl_ to control NUMA policy.
+
+Read the full details and results in the report: [Reverse Engineering MareNostrum 5 System Characteristics](https://github.com/JJOL/Memory-Performance-Microbenchmarking/blob/main/ProjectReport.pdf)
