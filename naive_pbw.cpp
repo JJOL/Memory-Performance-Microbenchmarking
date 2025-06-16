@@ -10,6 +10,9 @@
 #include <string>
 #include <cstdint>
 
+#define MAX(a,b) ((a > b) ? a : b)
+#define MIN(a,b) ((a < b) ? a : b)
+
 class Timer
 {
 public:
@@ -28,21 +31,21 @@ public:
             Stop();
     }
 
-    std::chrono::microseconds Stop()
+    std::chrono::nanoseconds Stop()
     {
         auto endTimePoint = std::chrono::high_resolution_clock::now();
         if (!m_IsRunning)
         {
             std::cout << "Timer is already stopped!" << std::endl;
-            return std::chrono::microseconds(0);
+            return std::chrono::nanoseconds(0);
         }
         m_IsRunning = false;
 
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
             endTimePoint - m_StartTimePoint
         );
-        std::cout << "(" << m_Name << ") total Duration: " << duration.count() << " microseconds" << std::endl;
-        std::cout << "(" << m_Name << ") total Duration: " << duration.count() / 1000.0 << " milliseconds" << std::endl;
+        // std::cout << "(" << m_Name << ") total Duration: " << duration.count() << " nanoseconds" << std::endl;
+        // std::cout << "(" << m_Name << ") total Duration: " << duration.count() / 1000000.0 << " milliseconds" << std::endl;
         return duration;
     }
 private:
@@ -63,41 +66,77 @@ int main() {
     // }
     // std::cout << "File read successfully and it takes " << buffer.size() << " bytes" << std::endl;
     
-    const size_t bufferSize = 764 * 1024 * 1024; // 764 MB
-    std::vector<uint64_t> buffer(bufferSize / sizeof(uint64_t));
-    for (size_t i = 0; i < buffer.size(); ++i) {
-        buffer[i] = static_cast<uint64_t>(i);
-    }
+    int memSizeKb = 2;
+    const int HOPS = 20;
+    int sizeKbs[HOPS];
+    double bwGBs[HOPS];
+    int64_t latencyNs[HOPS];
+    for (int hop = 0; hop < HOPS; hop++) {
+        std::cout << "Using " << memSizeKb << "KBs" << std::endl;
+        sizeKbs[hop] = memSizeKb;
+        
+        const ssize_t bufferSize = memSizeKb * 1024ULL; // 1024 MB1GB
 
-    // Calculate bandwidth by doing a simple XOR operation over all bytes, thus making all data to be transferred
-    // (This of course is limited to the BW of a single thread/core)
-    // volatile uint64_t  agg = 0;
-    volatile uint64_t agg0 = 0, agg1 = 0, agg2 = 0, agg3 = 0;
-    size_t i;
-    {
-        Timer timer("Vectorized Read");
-        for (i = 0; i < buffer.size(); i+= 1) { // can be 1 or 64 for byte offset
-            // agg ^= buffer[i];
-            agg0 ^= buffer[i];
-            // agg1 ^= buffer[i + 1];
-            // agg2 ^= buffer[i + 2];
-            // agg3 ^= buffer[i + 3];
+        std::vector<uint64_t> buffer(bufferSize / sizeof(uint64_t));
+        for (ssize_t i = 0; i < buffer.size(); i++) {
+            buffer[i] = static_cast<uint64_t>(i);
         }
-        // agg0 = agg0 ^ agg1 ^ agg2 ^ agg3;
-        auto duration_us = timer.Stop();
-        double seconds = duration_us.count() / 1e6;
-        size_t bytesRead = bufferSize;
+    
+        // Calculate bandwidth by doing a simple XOR operation over all bytes, thus making all data to be transferred
+        // (This of course is limited to the BW of a single thread/core)
+        // volatile uint64_t  agg = 0;
+        volatile uint64_t  agg0 = 0, agg1 = 0, agg2 = 0, agg3 = 0;
+    
+        double avgBwGBs = 0;
+        int64_t minLatencyNs = INT64_MAX;
+        for(int i = 0; i < 10; i++) {
+            Timer timer("Vectorized Read");
+            for (int j = 0; j < 1000000000/buffer.size(); j++)
+            {
+                for (ssize_t i = 0; i < buffer.size(); i+= 1) { // can be 1 or 64 for byte offset
+                    // agg ^= buffer[i];
+                    volatile double* _b = (volatile double *) buffer.data();
+                    _b[i];
+                }
+            }
+            auto duration_ns = timer.Stop();
+            int64_t nanoseconds = duration_ns.count();
+            double seconds;
+            if (nanoseconds > 0) {
+                seconds = nanoseconds / 1e9;
+            } else {
+                seconds = 0.5 / 1e9;
+            }
+            size_t bytesRead = bufferSize;
+    
+            auto bandwidth = 1000000000/buffer.size() * (bytesRead * 8.0) / seconds; // bits per 
+            double bwGBs = bandwidth / 8e9;
+            std::cout << "Bandwidth: " << bandwidth / 1e9 << " Gbps; " << nanoseconds << "ns" << std::endl;
+            std::cout << "           " << bwGBs << " GB/s" << std::endl;
+            avgBwGBs = MAX(bwGBs, avgBwGBs);
+            minLatencyNs = MIN(minLatencyNs, nanoseconds);
+        }
+        bwGBs[hop] = avgBwGBs;
+        // latencyNs[hop] = minLatencyNs;
 
-        auto bandwidth = (bytesRead * 8.0) / seconds; // bits per second
-        std::cout << "Bandwidth: " << bandwidth / 1e9 << " Gbps" << std::endl;
-        std::cout << "           " << bandwidth / 8e9 << " GB/s" << std::endl;
-
+        memSizeKb *= 2;
     }
-    // print agg as binary string
-    std::cout << "agg: " << agg0;
-    // for (size_t i = 0; i < sizeof(agg) * 8; ++i) {
-    //     std::cout << ((agg >> (sizeof(agg) * 8 - 1 - i)) & 1);
-    // }
-    std::cout << std::endl;
+
+
+
+    std::ofstream output("pbw.csv");
+    output << "Cache Sizes\n";
+    output << "Data Size (KBs),GB/s,Test\n";
+    // output << "Data Size (KBs),Latency (ns),Test\n";
+    for (int h = 0; h < HOPS; h++){
+        output << sizeKbs[h] << "," << bwGBs[h] << ",1 Thread\n"; 
+    }
+    output.close();
+    // // print agg as binary string
+    // std::cout << "agg: " << agg0;
+    // // for (size_t i = 0; i < sizeof(agg) * 8; ++i) {
+    // //     std::cout << ((agg >> (sizeof(agg) * 8 - 1 - i)) & 1);
+    // // }
+    // std::cout << std::endl;
     return 0;
 }
